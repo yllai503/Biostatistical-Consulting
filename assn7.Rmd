@@ -1,0 +1,765 @@
+---
+title: "Hub genes and cytokines influences on MRSA"
+date: "5/20/2022"
+author: Yenlin Lai
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read data
+
+```{r}
+# importing required packages
+library(readxl)
+
+#get your working directionary
+getwd()
+
+#change to your file path
+MRSA_status  <- read_excel("./MRSA_Decrypted.xlsx", 1)
+B_cell <- read_excel("./MRSA_Decrypted.xlsx", 2)
+T_cell  <- read_excel("./MRSA_Decrypted.xlsx", 3)
+Cytokine  <- read_excel("./MRSA_Decrypted.xlsx", 4)
+```
+
+## Combining the data with all rows
+
+```{r}
+library(dplyr)
+
+df <- MRSA_status %>% 
+  left_join(B_cell, by = c("SID" = "SID")) %>% 
+  left_join(T_cell, by = c("SID" = "SID"), suffix = c("_B_Cell", "_T_Cell")) %>% 
+  left_join(Cytokine, by = c("SID" = "SID"))
+
+head(df)
+```
+
+1. What hub genes and cytokines are significantly different between persistent and resolving outcome of MRSA infection in the cohort of 58 subjects? 
+a. Do these hub genes and cytokines influence outcome of MRSA individually?
+b. Do these hub genes and cytokines influence outcome of MRSA together? 
+
+```{r}
+library(dplyr)
+df1 <- 
+  df %>% select(-SID)
+
+###First Method: Lasso###
+##individually##
+library(glmnet)
+x <- df1 %>% select(-Status) %>% as.matrix()
+y <- df1 %>% select(Status) %>% unlist() %>% as.numeric() 
+fit_lasso <- 
+  cv.glmnet(x, y, family = "binomial", type.measure = "deviance", alpha = 1)
+plot(fit_lasso)
+fit_lasso$lambda.min
+fit_lasso$lambda.1se
+cof <- coef(fit_lasso$glmnet.fit, s=fit_lasso$lambda.min)
+sum(cof != 0)
+as.matrix(cof)[as.matrix(cof) != 0,]
+#We found 6 significant variables: Hub13_B_Cell, Hub2_T_Cell, Hub18_T_Cell, CYTO1, CYTO2, CYTO3.#
+
+##Fit these variables to logistic regression model##
+logistic_lasso <- glm(Status ~ (Hub13_B_Cell + Hub2_T_Cell + Hub18_T_Cell + 
+                            CYTO1 + CYTO2 + CYTO3), data = df1,
+                family = "binomial")
+summary(logistic_lasso)
+step_ll <- step(logistic_lasso)
+summary(step_ll)
+pchisq(step_ll$deviance, step_ll$df.residual, lower.tail = FALSE)
+#This stepwise model is significant#
+#We found 5 significant variables after using stepwise: Hub13_B_Cell, Hub18_T_Cell, CYTO1, CYTO2, CYTO3. These are the variables which influence outcome of MRSA individually the most.#
+
+##together##
+logistic_lasso_tog <- glm(Status ~ ((Hub13_B_Cell + Hub2_T_Cell +
+                                       Hub18_T_Cell)*(CYTO1 + CYTO2 + CYTO3)),
+                          data = df1, family = "binomial")
+summary(logistic_lasso_tog)
+anova(logistic_lasso, logistic_lasso_tog, test = "Chi")
+##The interaction terms are not significant. These hub genes and cytokines does not influence outcome of MRSA together.##
+
+###Second Method: Random Forest###
+library(randomForest)
+set.seed(402)
+fmod <- randomForest(Status ~., data = df1)
+importance(fmod)
+#Set the threshold to be 0.4, we found 11 significant variables: Hub13_B_Cell, Hub2_T_Cell, Hub4_T_Cell, Hub10_T_Cell, Hub11_T_Cell, Hub13_T_Cell, Hub16_T_Cell, Hub18_T_Cell, CYTO1, CYTO2, CYTO3.#
+
+##Fit these variables to logistic regression model##
+logistic_rf <- glm(Status ~ (Hub13_B_Cell + Hub2_T_Cell + Hub4_T_Cell+
+                               Hub10_T_Cell + Hub11_T_Cell + Hub13_T_Cell +
+                               Hub16_T_Cell + Hub18_T_Cell + CYTO1 + CYTO2 +
+                               CYTO3), data = df1,
+                family = "binomial")
+summary(logistic_rf)
+step_rf <- step(logistic_rf)
+summary(step_rf)
+pchisq(step_rf$deviance, step_rf$df.residual, lower.tail = FALSE)
+#This stepwise model is significant#
+#We found 5 significant variables after using stepwise: Hub2_T_Cell, Hub10_T_Cell, Hub11_T_Cell, Hub18_T_Cell, CYTO1, CYTO2, CYTO3. These are the variables which influence outcome of MRSA individually the most.#
+
+
+##together##
+logistic_rf_tog <- glm(Status ~ ((Hub2_T_Cell + Hub10_T_Cell + Hub11_T_Cell + 
+                                    Hub18_T_Cell)*(CYTO1 + CYTO2 + CYTO3)),
+                       data = df1, family = "binomial")
+summary(logistic_rf_tog)
+anova(logistic_rf, logistic_rf_tog, test = "Chi")
+##The interaction terms are not significant. These hub genes and cytokines does not influence outcome of MRSA together. The result matches with lasso method.##
+
+
+
+```
+
+c. Are any of these hub genes and cytokines significantly different between two groups?
+(two sample t-test? normality?)
+## Boxplots comparing each of the variable distributions between resolving (0) and persiting (1)
+
+```{r}
+library(tidyverse)
+
+df_main <- MRSA_status %>% 
+  left_join(B_cell, by = c("SID" = "SID")) %>% 
+  left_join(T_cell, by = c("SID" = "SID"), suffix = c("_B_Cell", "_T_Cell")) %>% 
+  left_join(Cytokine, by = c("SID" = "SID"))
+
+df_main$Status <- as.factor(df_main$Status)
+
+#B_Cell
+df_Bcell <- df_main %>% 
+  dplyr::select(SID, Status, ends_with("B_Cell")) %>%
+  pivot_longer(!c(SID, Status), names_to = "B_cell", values_to = "Measurement")
+
+ggplot(df_Bcell, aes(x = "Status", y = Measurement, fill = Status)) + 
+    geom_boxplot() +
+    facet_wrap(~B_cell, scale = "free")
+
+#T_cell
+df_Tcell <- df_main %>% 
+  dplyr::select(SID, Status, ends_with("T_Cell")) %>%
+  pivot_longer(!c(SID, Status), names_to = "T_cell", values_to = "Measurement")
+
+ggplot(df_Tcell, aes(x = "Status", y = Measurement, fill = Status)) + 
+    geom_boxplot() +
+    facet_wrap(~T_cell, scale = "free")
+
+#Cytokine
+df_Cyto <- df_main %>% 
+  dplyr::select(SID, Status, starts_with("CYTO")) %>%
+  pivot_longer(!c(SID, Status), names_to = "Cytokine", values_to = "Measurement")
+
+ggplot(df_Cyto, aes(x = "Status", y = Measurement, 
+                             fill = Status)) + 
+    geom_boxplot() +
+    facet_wrap(~Cytokine, scale = "free")
+```
+
+## Transform by adding 1 then logging (to meet upcoming tests' normality assumption)
+
+```{r}
+df_main_trans <- df_main 
+df_main_trans[, 3:45] <- log(df_main_trans[, 3:45] + 1)
+```
+
+## Two sample t-tests to compare geometric means of each variable between resolving (0) and persiting (1)
+
+```{r}
+#B_CELL 1
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub1_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub1_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub1_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 2
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub2_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub2_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub2_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 3
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub3_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub3_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub3_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 4
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub4_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub4_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub4_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 5
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub5_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub5_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub5_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 6
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub6_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub6_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub6_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 7
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub7_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub7_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub7_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 8
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub8_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub8_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub8_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 9
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub9_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub9_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub9_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 10
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub10_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub10_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub10_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 11
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub11_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub11_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub11_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 12
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub12_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub12_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub12_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 13
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub13_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub13_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub13_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 14
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub14_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub14_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub14_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 15
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub15_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub15_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub15_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 16
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub16_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub16_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub16_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 17
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub17_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub17_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub17_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 18
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub18_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub18_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub18_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 19
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub19_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub19_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub19_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#B_CELL 20
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub20_B_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub20_B_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub20_B_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 1
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub1_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub1_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub1_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 2
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub2_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub2_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub2_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 3
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub3_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub3_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub3_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 4
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub4_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub4_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub4_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 5
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub5_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub5_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub5_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 6
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub6_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub6_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub6_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 7
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub7_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub7_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub7_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 8
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub8_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub8_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub8_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 9
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub9_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub9_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub9_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 10
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub10_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub10_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub10_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 11
+
+#test for equal variances: VARIANCES UNEQUAL
+var.test(Hub11_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub11_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub11_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = FALSE)
+```
+
+```{r}
+#T_CELL 12
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub12_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub12_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub12_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 13
+
+#test for equal variances: VARIANCES UNEQUAL
+var.test(Hub13_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub13_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub13_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = FALSE)
+```
+
+```{r}
+#T_CELL 14
+
+#test for equal variances: VARIANCES UNEQUAL
+var.test(Hub14_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub14_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub14_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = FALSE)
+```
+
+```{r}
+#T_CELL 15
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub15_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub15_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub15_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 16
+
+#test for equal variances: VARIANCES UNEQUAL
+var.test(Hub16_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub16_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub16_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = FALSE)
+```
+
+```{r}
+#T_CELL 17
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub17_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub17_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub17_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 18
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub18_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub18_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub18_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 19
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub19_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub19_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub19_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#T_CELL 20
+
+#test for equal variances: VARIANCES EQUAL
+var.test(Hub20_T_Cell ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$Hub20_T_Cell[df_main_trans$Status == 0], 
+       df_main_trans$Hub20_T_Cell[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#CYTO 1
+
+#test for equal variances: VARIANCES UNEQUAL
+var.test(CYTO1 ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$CYTO1[df_main_trans$Status == 0], 
+       df_main_trans$CYTO1[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = FALSE)
+```
+
+```{r}
+#CYTO 2
+
+#test for equal variances: VARIANCES EQUAL
+var.test(CYTO2 ~ Status, data = df_main_trans)
+
+#two sample t-test: SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$CYTO2[df_main_trans$Status == 0], 
+       df_main_trans$CYTO2[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+```{r}
+#CYTO 3
+
+#test for equal variances: VARIANCES EQUAL
+var.test(CYTO3 ~ Status, data = df_main_trans)
+
+#two sample t-test: NOT SIGNIFICANTLY DIFFERENT
+t.test(df_main_trans$CYTO3[df_main_trans$Status == 0], 
+       df_main_trans$CYTO3[df_main_trans$Status == 1], 
+       alternative = "two.sided", var.equal = TRUE)
+```
+
+Significant differences were found between the geometric means for resolving and persisting for:
+-bhub2
+-bhub9
+-bhub13
+-bhub18
+-thub2
+-thub3
+-thub4
+-thub11
+-thub18
+-thub19
+-cyto2
+-cyto3
+
+2. What hub genes and cytokines in the blood sample specifically correlate with: 
+a. Resolving outcome of MRSA infection (ARMB)
+b. Persistent outcome of MRSA infection (APMB)
+
+```{r}
+library(corrplot)
+library(dplyr)
+
+df <- subset(df, select = -c(SID) )
+
+df_Status_0_Tcell <- df %>% filter(Status == 0) %>% dplyr::select(ends_with("T_cell"))
+df_Status_1_Tcell <- df %>% filter(Status == 1) %>% dplyr::select(ends_with("T_cell"))
+df_Status_0_Bcell <- df %>% filter(Status == 0) %>% dplyr::select(ends_with("B_cell"))
+df_Status_1_Bcell <- df %>% filter(Status == 1) %>% dplyr::select(ends_with("B_cell"))
+df_Status_0_Cyto <- df %>% filter(Status == 0) %>% dplyr::select(starts_with("CYTO"))
+df_Status_1_Cyto <- df %>% filter(Status == 1) %>% dplyr::select(starts_with("CYTO"))
+
+cor_matrix_Tcell_0 <- cor(df_Status_0_Tcell)
+cor_matrix_Tcell_1 <- cor(df_Status_1_Tcell)
+cor_matrix_Bcell_0 <- cor(df_Status_0_Bcell)
+cor_matrix_Bcell_1 <- cor(df_Status_1_Bcell)
+cor_matrix_Cyto_0 <- cor(df_Status_0_Cyto)
+cor_matrix_Cyto_1 <- cor(df_Status_1_Cyto)
+
+'
+corrplot(cor_matrix_Tcell_0, method="color", type="upper", order="hclust", tl.col="black")
+corrplot(cor_matrix_Tcell_1, method="color", type="upper", order="hclust", tl.col="black")
+corrplot(cor_matrix_Bcell_0, method="color", type="upper", order="hclust", tl.col="black")
+corrplot(cor_matrix_Bcell_1, method="color", type="upper", order="hclust", tl.col="black")
+corrplot(cor_matrix_Cyto_0, method="color", type="upper", order="hclust", tl.col="black")
+corrplot(cor_matrix_Cyto_1, method="color", type="upper", order="hclust", tl.col="black")
+'
+
+cor.mtest <- function(mat, ...) {
+    mat <- as.matrix(mat)
+    n <- ncol(mat)
+    p.mat<- matrix(NA, n, n)
+    diag(p.mat) <- 0
+    for (i in 1:(n - 1)) {
+        for (j in (i + 1):n) {
+            tmp <- cor.test(mat[, i], mat[, j], ...)
+            p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+        }
+    }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+
+p.mat_T0 <- cor.mtest(df_Status_0_Tcell)
+p.mat_T1 <- cor.mtest(df_Status_1_Tcell)
+p.mat_B0 <- cor.mtest(df_Status_0_Bcell)
+p.mat_B1 <- cor.mtest(df_Status_1_Bcell)
+p.mat_Cyto0 <- cor.mtest(df_Status_0_Cyto)
+p.mat_Cyto1 <- cor.mtest(df_Status_1_Cyto)
+
+corrplot(cor_matrix_Tcell_0, method="color", type="upper", order="hclust", tl.col="black", p.mat = p.mat_T0, sig.level = 0.05, insig = "blank", title="Tcell_0", mar=c(0,0,1,0))
+
+corrplot(cor_matrix_Tcell_1, method="color", type="upper", order="hclust", tl.col="black", p.mat = p.mat_T1, sig.level = 0.05, insig = "blank", title="Tcell_1", mar=c(0,0,1,0))
+
+corrplot(cor_matrix_Bcell_0, method="color", type="upper", order="hclust", tl.col="black", p.mat = p.mat_B0, sig.level = 0.05, insig = "blank", title="Bcell_0", mar=c(0,0,1,0))
+
+corrplot(cor_matrix_Bcell_1, method="color", type="upper", order="hclust", tl.col="black", p.mat = p.mat_B1, sig.level = 0.05, insig = "blank", title="Bcell_1", mar=c(0,0,1,0))
+
+corrplot(cor_matrix_Cyto_0, method="color", type="upper", order="hclust", tl.col="black", p.mat = p.mat_Cyto0, sig.level = 0.05, insig = "blank", title="Cyto_0", mar=c(0,0,1,0))
+
+corrplot(cor_matrix_Cyto_1, method="color", type="upper", order="hclust", tl.col="black", p.mat = p.mat_Cyto1, sig.level = 0.05, insig = "blank", title="Cyto_1", mar=c(0,0,1,0))
+```

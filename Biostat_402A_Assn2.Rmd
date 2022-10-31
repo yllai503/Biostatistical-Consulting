@@ -1,0 +1,148 @@
+---
+title: "Biostat 402A Assn2"
+author: "Yenlin Lai"
+date: "4/14/2022"
+output: pdf_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+
+```{r}
+library(haven)
+bpd <- read_dta("D:/UCLA Biostat/2022 Spring/Biostat 402A/Assignment2/bpd.dta")
+
+library(dplyr)
+bpd <- bpd %>% 
+  as_tibble() %>% 
+  print(width = Inf)
+```
+
+3. Perform a descriptive analysis including the following: 
+a. A demographic table describing the study population.
+```{r}
+library(table1)
+bpd$sex <- 
+  factor(bpd$sex, levels=c(1,0),
+         labels=c("Male", 
+                  "Female"))
+bpd$agar <- 
+  factor(bpd$agar)
+
+label(bpd$sex) <- "Sex"
+label(bpd$bxy) <- "Birth year"
+label(bpd$agar) <- "APGAR at 1 minute"
+label(bpd$gage) <- "Gestation age"
+label(bpd$bwt) <- "Birthweight"
+label(bpd$rage) <- "Respiratory symptoms age"
+label(bpd$vage) <- "Ventilatory assistance age"
+
+units(bpd$gage) <- "weeks*10"
+units(bpd$bwt) <- "gm"
+units(bpd$rage) <- "hours*10"
+units(bpd$vage) <- "hours"
+
+table1(~ sex + bxy + agar + gage + bwt + rage + vage, data = bpd,
+        render.continuous = c("Median" = "Median", "IQR" = "IQR"))
+```
+
+b. Plots (histograms or box plots) and summary statistics for the distributions of: 
+i. hours of exposure to low concentrations of elevated oxygen 
+ii. hours of exposure to medium concentrations of elevated oxygen 
+iii. hours of exposure to high concentrations of elevated oxygen 
+iv. hours of duration of endotracheal intubation 
+v. hours of duration of assisted ventilation 
+```{r}
+library(ggplot2)
+library(reshape2)
+bpd_b <- bpd %>%
+  select(lo2, mo2, ho2, idur, vdur) %>% 
+  melt()
+
+bpd_b %>% 
+  ggplot(aes(x = variable, y = value, fill = variable)) +
+  geom_boxplot() +
+  coord_cartesian(ylim = quantile(bpd_b$value, c(0,0.99), na.rm = TRUE)) +
+  labs(y = "Hours", x = "") +
+  scale_fill_brewer(palette = "Blues") + 
+  theme(legend.position = "none") + 
+  theme_light()
+
+label(bpd$lo2) <- "Exposure to low concentrations of elevated oxygen"
+label(bpd$mo2) <- "Exposure to medium concentrations of elevated oxygen "
+label(bpd$ho2) <- "Exposure to high concentrations of elevated oxygen"
+label(bpd$idur) <- "Duration of endotracheal intubation"
+label(bpd$vdur) <- "Duration of assisted ventilation"
+
+units(bpd$lo2) <- "hours"
+units(bpd$mo2) <- "hours"
+units(bpd$ho2) <- "hours"
+units(bpd$idur) <- "hours"
+units(bpd$vdur) <- "hours"
+
+table1(~ lo2 + mo2 + ho2 + idur + vdur, data = bpd)
+```
+c. Counts (or bar graphs) of RDS and radiographic BPD scores.
+```{r}
+ggplot(bpd, aes(x = factor(rds))) +
+  geom_bar() + 
+  geom_text(aes(label = ..count..), stat = "count", vjust = -0.2) +
+  labs(x = "Severity of RDS", title = "Counts for RDS Severity") + 
+  scale_fill_brewer(palette = "Blues") +
+  theme_light()
+
+bpd <- bpd %>% 
+  mutate(bpd = bpd/10)
+ggplot(bpd, aes(x = factor(bpd))) +
+  geom_bar() + 
+  geom_text(aes(label = ..count..), stat = "count", vjust = -0.2) +
+  labs(x = "Radiographic BPD score", title = "Counts for Radiographic BPD") +
+  theme_light()
+
+bpd <- bpd %>% 
+  mutate(haverds = ifelse(rds >= 1, "Yes", "No"),
+         severerds = ifelse(rds == 5, "Yes", "No"),
+         haveBPD = ifelse(bpd >=3, "Yes", "No"))
+bpd %>% 
+  ggplot(aes(x = haverds)) +
+  geom_bar() + 
+  geom_text(aes(label = ..count..), stat = "count", vjust = -0.2) +
+  labs(x = "Infants had RDS", title = "Bar chart for Infants with RDS") +
+  theme_light()
+
+bpd %>% 
+  ggplot(aes(x = severerds)) +
+  geom_bar() + 
+  geom_text(aes(label = ..count..), stat = "count", vjust = -0.2) +
+  labs(x = "Infants had Severe RDS", 
+       title = "Bar chart for Infants with Severe RDS") +
+  theme_light()
+
+bpd %>% 
+  ggplot(aes(x = haveBPD)) +
+  geom_bar() + 
+  geom_text(aes(label = ..count..), stat = "count", vjust = -0.2) +
+  labs(x = "Infants had BPD", title = "Bar chart for Infants with BPD") +
+  theme_light()
+  
+
+```
+
+
+d. Missing data and outliers. Identify variables with large numbers of missing data values (say, >20% missing). List variables with extreme outliers.
+
+```{r}
+library(naniar)
+bpd <- 
+  bpd %>% 
+  replace_with_na(replace = list(brmu = 0, puin = 0, hyme = 0, alin = 0,
+                                 emph = 0, lbpd = 0, hema = 0))
+bpd %>% 
+  sapply(function(x) sum(is.na(x)/length(x)))
+
+bpd %>%
+  select(-c(haverds, severerds, haveBPD)) %>% 
+  sapply(function(x) sort(boxplot(x, plot = FALSE)$out))
+```

@@ -1,0 +1,43 @@
+---
+title: "Biostat 402A Assn3"
+author: "Yenlin Lai"
+date: "4/21/2022"
+output: pdf_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+
+```{r}
+library(haven)
+cac <- read_dta("D:/UCLA Biostat/2022 Spring/Biostat 402A/Assignment3/cac.dta")
+
+library(dplyr)
+cac <- cac %>% 
+  as_tibble() %>% 
+  print(width = Inf)
+```
+```{r}
+cac1 <- cac %>% 
+  mutate(rate = (vol2 - vol1) / days,
+         srrate = sqrt(rate))
+
+cac %>% 
+  group_by(sex) %>% 
+  summarise(n = n(), mean = mean(rate), sd = sd(rate))
+
+library(ggplot2)
+cac1$sex <- 
+  factor(cac1$sex, levels=c(1,0),
+         labels=c("Male", 
+                  "Female"))
+
+cac1 %>% 
+  ggplot(mapping = aes(y = rate, x = sex), colour = c("Blue", "Red")) + 
+  geom_boxplot() + 
+  labs(x = "Sex")
+  
+```
+
